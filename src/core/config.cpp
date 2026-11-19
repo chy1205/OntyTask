@@ -171,6 +171,10 @@ void ConfigLoad() {
     g_cfg.uiIcon = 0;
   g_cfg.autoMinimize =
       GetPrivateProfileIntW(L"OntyTask", L"auto_minimize", 0, ini.c_str());
+  g_cfg.backgroundMode =
+      GetPrivateProfileIntW(L"OntyTask", L"background_mode", 0, ini.c_str());
+  if (g_cfg.backgroundMode < 0 || g_cfg.backgroundMode > 1)
+    g_cfg.backgroundMode = 0;
   g_cfg.mode = GetPrivateProfileIntW(L"OntyTask", L"mode", 0, ini.c_str());
   if (g_cfg.mode < 0 || g_cfg.mode > 1)
     g_cfg.mode = 0;
@@ -363,6 +367,7 @@ void ConfigSave() {
   w(L"ui_scale", g_cfg.uiScale);
   w(L"ui_icon", g_cfg.uiIcon);
   w(L"auto_minimize", g_cfg.autoMinimize);
+  w(L"background_mode", g_cfg.backgroundMode);
   w(L"mode", g_cfg.mode);
   w(L"click_target", g_cfg.clickTarget);
   swprintf_s(b, L"%lld", g_cfg.clickInterval);
