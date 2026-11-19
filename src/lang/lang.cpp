@@ -197,6 +197,8 @@ static const char *kKeys[L_COUNT] = {
     "scale",
     "progress",
     "eta",
+    "background",
+    "background_hint",
 };
 
 static bool ReadResourceText(int id, std::string &out) {
