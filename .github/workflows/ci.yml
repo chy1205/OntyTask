@@ -57,3 +57,22 @@ jobs:
 
                   & $exe "$testFile" --play --loop 1 --speed 100 --close-after --min
                   Remove-Item -Path $testFile -Force -ErrorAction SilentlyContinue
+
+            - name: Prepare release files
+              shell: pwsh
+              run: |
+                  $arch = "${{ matrix.platform }}"
+                  $target = "bin/$arch/OntyTask.exe"
+                  $hash = (Get-FileHash -Path $target -Algorithm SHA256).Hash.ToLower()
+                  $line = "$hash  OntyTask.exe"
+                  $line | Set-Content -Path "bin/$arch/SHA256SUMS.txt" -Encoding ascii
+                  Write-Output $line
+
+            - name: Upload build artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: OntyTask-Release-x64
+                  path: |
+                      bin/x64/OntyTask.exe
+                      bin/x64/SHA256SUMS.txt
+                  if-no-files-found: error
