@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <string>
 #include <vector>
 #include <windows.h>
@@ -26,6 +26,7 @@ struct Config {
   int statusbarProgress, statusbarEta;
   int statusbarAlign;
   int autoMinimize;
+  int backgroundMode;
   int mode;
   int clickTarget, clickButton, clickType;
   long long clickInterval;
