@@ -32,6 +32,9 @@ static bool g_mbLeft = false, g_mbRight = false, g_mbMid = false,
 static HANDLE g_playThread = nullptr;
 static bool g_rawOk = false;
 static HWND g_targetHwnd = nullptr;
+static HWND g_bgTarget = nullptr;  // resolved background target window for
+                                   // PostMessage injection
+static bool g_bgActive = false;    // resolved and usable this playback
 
 static const int MAX_EVENTS = 100000;
 
@@ -715,6 +718,160 @@ static bool BtnIsDown(int btn) {
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// Background (post-message) injection channel.
+//
+// Unlike the foreground path (SetCursorPos + mouse_event/keybd_event), this
+// resolves one target top-level window and delivers WM_* messages directly to
+// it. The real cursor is not moved. Compatibility is application-dependent:
+// many DirectInput/D3D games, Electron/Chromium and custom-drawn controls do
+// not respond to window messages, so the foreground path remains the default
+// and this is an opt-in mode.
+// ---------------------------------------------------------------------------
+
+// Map a recorded screen point to client coordinates of the target window.
+static bool ScreenToClientBg(LONG sx, LONG sy, POINT &out) {
+  out.x = sx;
+  out.y = sy;
+  if (!g_bgTarget)
+    return false;
+  return ScreenToClient(g_bgTarget, &out) != FALSE;
+}
+
+static WPARAM BgWParam(int btn) {
+  switch (btn) {
+  case 1:
+    return MK_RBUTTON;
+  case 2:
+    return MK_MBUTTON;
+  default:
+    return MK_LBUTTON;
+  }
+}
+
+static LPARAM BgLParam(POINT pt) {
+  return MAKELPARAM((SHORT)pt.x, (SHORT)pt.y);
+}
+
+static void BgPostMouse(int btn, bool down, LONG sx, LONG sy) {
+  if (!g_bgActive)
+    return;
+  POINT pt;
+  if (!ScreenToClientBg(sx, sy, pt))
+    return;
+  UINT downMsg, upMsg;
+  switch (btn) {
+  case 1:
+    downMsg = WM_RBUTTONDOWN;
+    upMsg = WM_RBUTTONUP;
+    break;
+  case 2:
+    downMsg = WM_MBUTTONDOWN;
+    upMsg = WM_MBUTTONUP;
+    break;
+  case 3:
+  case 4:
+    // X buttons are not reliably expressible through background messages;
+    // post them to the target and let it ignore unsupported buttons.
+    downMsg = WM_XBUTTONDOWN;
+    upMsg = WM_XBUTTONUP;
+    break;
+  default:
+    downMsg = WM_LBUTTONDOWN;
+    upMsg = WM_LBUTTONUP;
+    break;
+  }
+  UINT msg = down ? downMsg : upMsg;
+  WPARAM wp = BgWParam(btn);
+  LPARAM lp = BgLParam(pt);
+  PostMessageW(g_bgTarget, msg, wp, lp);
+  PostMessageW(g_bgTarget, WM_MOUSEMOVE, wp, lp);
+}
+
+static void BgPostKey(BYTE vk, bool down) {
+  if (!g_bgActive)
+    return;
+  WPARAM wp = vk;
+  PostMessageW(g_bgTarget, down ? WM_KEYDOWN : WM_KEYUP, wp, 0);
+}
+
+static void BgPostWheel(SHORT delta) {
+  if (!g_bgActive)
+    return;
+  PostMessageW(g_bgTarget, WM_MOUSEWHEEL,
+               (WPARAM)((SHORT)delta << 16), 0);
+}
+
+static void BgResolveTarget() {
+  g_bgActive = false;
+  g_bgTarget = nullptr;
+  if (!g_cfg.backgroundMode)
+    return;
+  // Prefer the window focused at record time; fall back to the current
+  // foreground window. Skip our own window.
+  HWND cand = g_targetHwnd;
+  if (!cand || !IsWindow(cand) || cand == g_hwnd)
+    cand = GetForegroundWindow();
+  if (!cand || cand == g_hwnd)
+    return;
+  g_bgTarget = cand;
+  g_bgActive = true;
+}
+
+static void BgBtnDown(int btn) {
+  if (g_bgActive) {
+    // Background clicks are point-in-time; hold state is tracked only for the
+    // foreground path.
+    g_playBtnDown[btn] = true;
+    return;
+  }
+  BtnDown(btn);
+}
+
+static void BgBtnUp(int btn) {
+  if (g_bgActive) {
+    g_playBtnDown[btn] = false;
+    return;
+  }
+  BtnUp(btn);
+}
+
+static void BgMoveTo(LONG sx, LONG sy) {
+  if (!g_bgActive) {
+    if (sx != 0 || sy != 0)
+      SetCursorPos(sx, sy);
+  }
+  // No real cursor movement in background mode; client-side coordinates are
+  // resolved lazily at click time.
+}
+
+static void BgMoveDelta(SHORT dx, SHORT dy) {
+  if (!g_bgActive)
+    mouse_event(MOUSEEVENTF_MOVE, (DWORD)(int16_t)dx,
+                (DWORD)(int16_t)dy, 0, 0);
+  // Relative background movement is not applied: PostMessage cannot move a
+  // hidden cursor and per-step client deltas are unreliable across apps.
+}
+
+static void BgPostMouseAt(int btn, bool down, LONG sx, LONG sy) {
+  if (g_bgActive)
+    BgPostMouse(btn, down, sx, sy);
+}
+
+static void BgSendKey(BYTE vk, bool down, DWORD flags) {
+  if (g_bgActive)
+    BgPostKey(vk, down);
+  else
+    SendKey(vk, down, flags);
+}
+
+static void BgWheel(SHORT delta, LONG sx, LONG sy) {
+  if (g_bgActive)
+    BgPostWheel(delta);
+  else
+    mouse_event(MOUSEEVENTF_WHEEL, 0, 0, (DWORD)(int)delta, 0);
+}
+
 static void BtnDown(int btn) {
   if (btn >= 0 && btn < 5)
     g_playBtnDown[btn] = true;
@@ -820,6 +977,7 @@ static bool CheckPanic() {
 }
 
 static DWORD WINAPI PlayProc(LPVOID) {
+  BgResolveTarget();
   int total = g_cfg.continuous ? INT_MAX : (g_cfg.loops < 1 ? 1 : g_cfg.loops);
   double f = DelayFactor();
   for (int lp = 0; lp < total; lp++) {
@@ -833,7 +991,7 @@ static DWORD WINAPI PlayProc(LPVOID) {
     };
     for (const MAc &a : g_events) {
       if (a.x != 0 || a.y != 0) {
-        SetCursorPos(a.x, a.y);
+        BgMoveTo(a.x, a.y);
         break;
       }
     }
@@ -849,10 +1007,11 @@ static DWORD WINAPI PlayProc(LPVOID) {
           waitDue();
         }
         if (a.x != 0 || a.y != 0) {
-          SetCursorPos(a.x, a.y);
+          BgMoveTo(a.x, a.y);
         }
         if (a.mDown && !BtnIsDown(a.btn)) {
-          BtnDown(a.btn);
+          BgBtnDown(a.btn);
+          BgPostMouseAt(a.btn, true, a.x, a.y);
         }
         for (size_t i = 0; i < a.path.size(); i++) {
           if (CheckPanic())
@@ -862,46 +1021,45 @@ static DWORD WINAPI PlayProc(LPVOID) {
           waitDue();
           SHORT dx = (SHORT)a.path[i].first;
           SHORT dy = (SHORT)a.path[i].second;
-          mouse_event(MOUSEEVENTF_MOVE, (DWORD)(int16_t)dx, (DWORD)(int16_t)dy,
-                      0, 0);
+          BgMoveDelta(dx, dy);
         }
         if (a.mUp && BtnIsDown(a.btn)) {
           due += 10;
           waitDue();
-          BtnUp(a.btn);
+          BgBtnUp(a.btn);
+          BgPostMouseAt(a.btn, false, a.x, a.y);
         }
         break;
       }
       case A_MD:
         due += a.delay;
         waitDue();
-        if (a.x != 0 || a.y != 0)
-          SetCursorPos(a.x, a.y);
-        BtnDown(a.btn);
+        BgMoveTo(a.x, a.y);
+        BgBtnDown(a.btn);
+        BgPostMouseAt(a.btn, true, a.x, a.y);
         break;
       case A_MU:
         due += a.delay;
         waitDue();
-        if (a.x != 0 || a.y != 0)
-          SetCursorPos(a.x, a.y);
-        BtnUp(a.btn);
+        BgMoveTo(a.x, a.y);
+        BgBtnUp(a.btn);
+        BgPostMouseAt(a.btn, false, a.x, a.y);
         break;
       case A_KD:
         due += a.delay;
         waitDue();
-        SendKey(a.vk, true, a.flags);
+        BgSendKey(a.vk, true, a.flags);
         break;
       case A_KU:
         due += a.delay;
         waitDue();
-        SendKey(a.vk, false, a.flags);
+        BgSendKey(a.vk, false, a.flags);
         break;
       case A_WH:
         due += a.delay;
         waitDue();
-        if (a.x != 0 || a.y != 0)
-          SetCursorPos(a.x, a.y);
-        mouse_event(MOUSEEVENTF_WHEEL, 0, 0, (DWORD)(int)a.wheel, 0);
+        BgMoveTo(a.x, a.y);
+        BgWheel(a.wheel, a.x, a.y);
         break;
       }
     }
@@ -944,7 +1102,10 @@ bool Engine_Play() {
     CloseHandle(g_playThread);
     g_playThread = nullptr;
   }
-  if (g_targetHwnd && IsWindow(g_targetHwnd) && g_targetHwnd != g_hwnd)
+  // Foreground mode brings the recorded window to the front; background mode
+  // leaves the target window where it is and posts messages to it.
+  if (!g_cfg.backgroundMode && g_targetHwnd && IsWindow(g_targetHwnd) &&
+      g_targetHwnd != g_hwnd)
     SetForegroundWindow(g_targetHwnd);
   g_playStop = false;
   g_playStopped = false;
