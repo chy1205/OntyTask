@@ -180,6 +180,8 @@
         "theme_import": "导入主题 JSON...",
         "scale": "界面缩放",
         "progress": "进度条",
-        "eta": "剩余"
+        "eta": "剩余",
+        "background": "后台回放",
+        "background_hint": "向录制窗口投递消息而不移动光标；部分应用/游戏可能不响应。"
     }
 }
