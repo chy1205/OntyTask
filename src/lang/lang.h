@@ -181,6 +181,8 @@ enum LStrId {
   L_SCALE,
   L_PROGRESS,
   L_ETA,
+  L_BACKGROUND,
+  L_BACKGROUND_HINT,
   L_COUNT
 };
 
