@@ -180,6 +180,8 @@
         "theme_import": "Import theme JSON...",
         "scale": "Interface scale",
         "progress": "Progress bar",
-        "eta": "ETA"
+        "eta": "ETA",
+        "background": "Background playback",
+        "background_hint": "Post messages to the recorded window without moving the cursor; some apps/games may not respond."
     }
 }
