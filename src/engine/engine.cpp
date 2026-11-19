@@ -36,6 +36,11 @@ static HWND g_bgTarget = nullptr;  // resolved background target window for
                                    // PostMessage injection
 static bool g_bgActive = false;    // resolved and usable this playback
 
+// Forward declarations for the foreground helpers referenced by the Bg* wrappers.
+static void BtnDown(int btn);
+static void BtnUp(int btn);
+static void SendKey(BYTE vk, bool down, DWORD flags);
+
 static const int MAX_EVENTS = 100000;
 
 static std::mutex g_mvMtx;
